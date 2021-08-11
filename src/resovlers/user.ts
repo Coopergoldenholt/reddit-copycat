@@ -1,7 +1,8 @@
 import { User } from "../entities/User";
 import { MyContext } from "../types";
-import { Arg, Field, InputType, Ctx, Resolver, Mutation, ObjectType } from "type-graphql";
+import { Arg, Field, InputType, Ctx, Resolver, Mutation, ObjectType, Query } from "type-graphql";
 import argon2 from 'argon2'
+import { EntityManager } from '@mikro-orm/postgresql'
 
 @InputType()
 class UsernamePasswordInput {
@@ -31,10 +32,22 @@ class UserResponse {
 
 @Resolver()
 export class UserResolver {
+    @Query(() => User, { nullable: true })
+    async me(
+        @Ctx() { req, em }: MyContext
+    ) {
+        if (!req.session.userId) {
+            return null
+        }
+        const user = await em.findOne(User, { id: req.session.userId });
+        return user;
+    }
+
+
     @Mutation(() => UserResponse)
     async register(
         @Arg('options') options: UsernamePasswordInput,
-        @Ctx() { em }: MyContext
+        @Ctx() { em, req }: MyContext
     ): Promise<UserResponse> {
         if (options.username.length <= 2) {
             return {
@@ -42,15 +55,23 @@ export class UserResolver {
             }
         }
 
-        if (options.password.length <= 3) {
+        if (options.password.length <= 2) {
             return {
-                errors: [{ field: 'password', message: "length must be greater then 3" }]
+                errors: [{ field: 'password', message: "length must be greater then 2" }]
             }
         }
         const hashedPassword = await argon2.hash(options.password)
-        const user = em.create(User, { username: options.username, password: hashedPassword })
+        let user;
         try {
-            await em.persistAndFlush(user)
+            const result = await (em as EntityManager).createQueryBuilder(User).getKnexQuery().insert(
+                {
+                    username: options.username, password: hashedPassword,
+                    created_at: new Date(),
+                    updated_at: new Date()
+                }
+            ).returning('*')
+            user = result[0]
+            // await em.persistAndFlush(user)
         } catch (err) {
             //duplicate username error
             if (err.code === '23505') {
@@ -63,8 +84,8 @@ export class UserResolver {
                     ]
                 }
             }
-            console.log('message', err.message)
         }
+        req.session.userId = user.id
         return { user }
     }
 
@@ -89,7 +110,7 @@ export class UserResolver {
             }
         }
 
-        req.session!.userId = user.id;
+        req.session!.userId = user.id
 
         return { user }
     }

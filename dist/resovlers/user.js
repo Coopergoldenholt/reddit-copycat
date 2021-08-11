@@ -59,21 +59,33 @@ UserResponse = __decorate([
     type_graphql_1.ObjectType()
 ], UserResponse);
 let UserResolver = class UserResolver {
-    async register(options, { em }) {
+    async me({ req, em }) {
+        if (!req.session.userId) {
+            return null;
+        }
+        const user = await em.findOne(User_1.User, { id: req.session.userId });
+        return user;
+    }
+    async register(options, { em, req }) {
         if (options.username.length <= 2) {
             return {
                 errors: [{ field: 'username', message: "length must be greater then 2" }]
             };
         }
-        if (options.password.length <= 3) {
+        if (options.password.length <= 2) {
             return {
-                errors: [{ field: 'password', message: "length must be greater then 3" }]
+                errors: [{ field: 'password', message: "length must be greater then 2" }]
             };
         }
         const hashedPassword = await argon2_1.default.hash(options.password);
-        const user = em.create(User_1.User, { username: options.username, password: hashedPassword });
+        let user;
         try {
-            await em.persistAndFlush(user);
+            const result = await em.createQueryBuilder(User_1.User).getKnexQuery().insert({
+                username: options.username, password: hashedPassword,
+                created_at: new Date(),
+                updated_at: new Date()
+            }).returning('*');
+            user = result[0];
         }
         catch (err) {
             if (err.code === '23505') {
@@ -86,8 +98,8 @@ let UserResolver = class UserResolver {
                     ]
                 };
             }
-            console.log('message', err.message);
         }
+        req.session.userId = user.id;
         return { user };
     }
     async login(options, { em, req }) {
@@ -106,9 +118,17 @@ let UserResolver = class UserResolver {
             };
         }
         req.session.userId = user.id;
+        console.log(req.session.userId);
         return { user };
     }
 };
+__decorate([
+    type_graphql_1.Query(() => User_1.User, { nullable: true }),
+    __param(0, type_graphql_1.Ctx()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], UserResolver.prototype, "me", null);
 __decorate([
     type_graphql_1.Mutation(() => UserResponse),
     __param(0, type_graphql_1.Arg('options')),
